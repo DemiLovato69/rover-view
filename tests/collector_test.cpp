@@ -15,6 +15,7 @@
 #include <QQuickStyle>
 #include <QtEndian>
 #include <QSqlQuery>
+#include <QJsonDocument>
 #include <QBuffer>
 #include <QPainter>
 #include <QQmlComponent>
@@ -48,6 +49,168 @@ class CollectorTest : public QObject {
         QCOMPARE(mean["quality"].toString(), "mixed float/fixed");
         QVERIFY(std::abs(mean["horizontalRmsM"].toDouble() - std::sqrt(5.)) < 1e-8);
         QCOMPARE(mean["verticalRmsM"].toDouble(), 0.);
+    }
+    void trenchSidesAndEnds() {
+        Fieldwork::Guide g;
+        g.source = {{0, 0}, {0, 10}, {5, 15}};
+        g.center = Fieldwork::parallel(g.source, .5);
+        g.left = Fieldwork::parallel(g.source, -.1);
+        g.right = Fieldwork::parallel(g.source, 1.1);
+        QCOMPARE(g.center[0], QPointF(.5, 0));
+        auto r = g.measure({.8, 5});
+        QCOMPARE(r["segment"].toInt(), 1);
+        QVERIFY(std::abs(r["rightM"].toDouble() - .3) < 1e-10);
+        QVERIFY(std::abs(r["fromFeatureM"].toDouble() - .8) < 1e-10);
+        QVERIFY(r["inside"].toBool());
+        g.target = "Right edge";
+        QVERIFY(std::abs(g.measure({.8, 5})["rightM"].toDouble() + .3) < 1e-10);
+        QVERIFY(!g.measure({1.5, 5})["inside"].toBool());
+        QCOMPARE(g.measure({.8, -2})["status"].toString(), "Before start");
+        QCOMPARE(g.measure({10, 20})["status"].toString(), "Past end");
+        g.source = {{0, 0}, {2, 2}, {0, 2}, {2, 0}};
+        g.center = g.left = g.right = g.source;
+        QVERIFY(g.measure({1, 1})["status"].toString().startsWith("Ambiguous"));
+        g.locked = 2;
+        QCOMPARE(g.measure({1, 1})["segment"].toInt(), 3);
+        QCOMPARE(g.measure({1, 1})["rightM"].toDouble(), 0.);
+        QVERIFY(Fieldwork::parallel({{0, 0}, {1, 0}, {0, 0}}, 1).isEmpty());
+    }
+    void dxfEntities() {
+        QFile fixture(":/fixtures/practice-trench.dxf");
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        auto bytes = fixture.readAll();
+        auto d = Fieldwork::dxf(bytes);
+        QVERIFY(d.error.isEmpty());
+        QCOMPARE(d.units, "Metres");
+        QCOMPARE(d.lines.size(), 2);
+        QCOMPARE(d.lines[0].en.size(), 3);
+        bytes.replace("90\n3\n", "42\n0.4\n90\n3\n");
+        bytes.replace("0\nLINE\n", "0\nARC\n8\nCURVES\n0\nPOLYLINE\n8\nString\n70\n8\n0\nVERTEX\n10\n1\n20"
+                                   "\n2\n30\n50\n0\nVERTEX\n10\n4\n20\n7\n30\n58\n0\nSEQEND\n0\nLINE\n");
+        d = Fieldwork::dxf(bytes);
+        QVERIFY(d.error.isEmpty());
+        QCOMPARE(d.skipped, 2);
+        QCOMPARE(d.lines.size(), 2);
+        QCOMPARE(d.lines.first().en.last(), QPointF(4, 7));
+        QVERIFY(!Fieldwork::dxf(bytes.left(bytes.size() - 6)).error.isEmpty());
+    }
+    void measuredGroundRoundTrip() {
+        QVariantList rows;
+        auto pj = Surface::utmProjection(2959);
+        for (auto xy : QPolygonF{{0, 0}, {0, 2}, {2, 0}, {2, 2}, {35, 35}}) {
+            auto p = Fieldwork::geographic(pj.get(), QPointF(426869.205, 5015098.440) + xy);
+            p["id"] = QString::number(rows.size());
+            p["frame"] = "Practice";
+            p["groundCgvd2013M"] = 112. + xy.x() * .02;
+            p["surfaceIncluded"] = true;
+            rows << p;
+        }
+        auto terrain = Fieldwork::terrain(rows, "Pad & grade", "Practice", 2959, "CGVD2013", 3);
+        QVERIFY2(terrain.error.isEmpty(), qPrintable(terrain.error));
+        QCOMPARE(terrain.count, 5);
+        QCOMPARE(terrain.triangles.size(), 2);
+        QVERIFY(terrain.gaps > 0);
+        Surface imported;
+        QVERIFY(imported.read(terrain.xml, "Pad & grade - surveyed ground").isEmpty());
+        auto at = [&](QPointF offset) {
+            auto p = Fieldwork::geographic(pj.get(), QPointF(426869.205, 5015098.440) + offset);
+            return imported.target(p["latitudeDeg"].toDouble(), p["longitudeDeg"].toDouble());
+        };
+        auto middle = at({1, 1});
+        QVERIFY(middle);
+        QVERIFY(std::abs(*middle - 112.02) < 1e-6);
+        QVERIFY(!at({12, 12}));
+        QVERIFY(!Fieldwork::terrain(rows, "Pad", "Other", 2959, "CGVD2013", 3).error.isEmpty());
+        QVERIFY(!Fieldwork::terrain(rows, "Pad", "Practice", 2959, "Ellipsoid", 3).error.isEmpty());
+        rows << rows.first();
+        QVERIFY(!Fieldwork::terrain(rows, "Pad", "Practice", 2959, "CGVD2013", 3).error.isEmpty());
+    }
+    void fieldworkJob() {
+        QString line;
+        {
+            Survey s;
+            QVERIFY(s.createJob("Trench", "ARP", 2, "Practice CSRS"));
+            QVERIFY(s.setCoverage(true, true, .5));
+            auto d = s.inspectDxf({});
+            QCOMPARE(d["count"].toInt(), 2);
+            QVERIFY(s.importDxf({"Drain A"}, 2959, "Metres"));
+            QCOMPARE(s.features().size(), 1);
+            line = s.features().first().toMap()["name"].toString();
+            QVERIFY(s.followLine(line, .5, 1.2, "Right edge", 0, false));
+            QVERIFY(s.gradingWalk());
+            QTRY_VERIFY(s.state()["canStore"].toBool());
+            auto r = s.state()["line"].toMap();
+            QCOMPARE(r["status"].toString(), "Tracking");
+            QVERIFY(r["rightM"].toDouble() < 0);
+            QVERIFY(s.store("A", "edge"));
+            QVERIFY(!s.store("duplicate", "edge"));
+            QCOMPARE(s.points().size(), 1);
+            auto a = s.points()[0].toMap();
+            QCOMPARE(a["sampleRadiusM"].toDouble(), .5);
+            QVERIFY(s.setCoverage(false, true, 1.5));
+            QTRY_VERIFY(s.state()["canStore"].toBool());
+            QVERIFY(s.store("B", "edge"));
+            auto b = s.points()[0].toMap();
+            QVERIFY(!b.contains("surfaceIncluded"));
+            QVERIFY(s.includeShot("Trench", "B", b["gpst"].toString(), true));
+            QCOMPARE(s.points()[0].toMap()["sampleRadiusM"].toDouble(), 1.5);
+            QCOMPARE(s.points()[1].toMap()["sampleRadiusM"].toDouble(), .5);
+            QVERIFY(s.createLine("Return", {b, a}));
+            QVERIFY(!s.createLine("Return", {a, b}));
+            QVERIFY(!s.previewTerrain(2959, "CGVD2013", 5));
+            s.stop();
+            QVERIFY(!s.state()["line"].toMap().contains("rightM"));
+            // Third off-line survey shot in the same job; the two actual captures above came from RTKLIB.
+            auto c = a;
+            c["id"] = "C";
+            c["latitudeDeg"] = a["latitudeDeg"].toDouble() + .00002;
+            c["gpst"] = "fixture";
+            QSqlQuery q;
+            q.prepare("INSERT INTO points VALUES('Trench','C','fixture',?,'[]')");
+            q.addBindValue(QJsonDocument::fromVariant(c).toJson());
+            QVERIFY(q.exec());
+            s.openJob("Trench");
+            QVERIFY(s.previewTerrain(2959, "CGVD2013", 5));
+            auto dest = QUrl::fromLocalFile(temp.filePath("ground.landxml"));
+            QVERIFY(s.exportTerrain(dest));
+            QFile f(dest.toLocalFile());
+            QVERIFY(f.open(QIODevice::ReadOnly));
+            Surface back;
+            QVERIFY(back.read(f.readAll(), "Trench - surveyed ground").isEmpty());
+            QCOMPARE(back.faces.size(), 1);
+            QVERIFY(s.includeShot("Trench", "C", "fixture", false));
+            QVERIFY(!s.exportTerrain(dest));
+            QVERIFY(s.deletePoint("Trench", "A", a["gpst"].toString()));
+            QCOMPARE(s.features().size(), 2);
+        }
+        Survey reopened;
+        QCOMPARE(reopened.fieldPrefs()["follow"].toString(), line);
+        QCOMPARE(reopened.guidePaths()["source"].toList().size(), 3);
+        QVERIFY(reopened.createJob("Empty feature job", "ARP", 2, "Practice CSRS"));
+        QVERIFY(reopened.features().isEmpty());
+        QVERIFY(reopened.fieldPrefs().isEmpty());
+    }
+    void constructionLines() {
+        QString name = "Fence";
+        QVariantMap a{{"latitudeDeg", -33.0000}, {"longitudeDeg", 151.0}}, b = a;
+        b["latitudeDeg"] = -32.9999;
+        {
+            Survey s;
+            QVERIFY(s.createJob("Unreferenced site", "ARP", 2, ""));
+            QVERIFY(!s.createLine(name, {a, a}));
+            QVERIFY(!s.createLine(name, {QVariantMap{}, b}));
+            QVERIFY(s.createLine(name, {a, b}));
+        }
+        Survey s;
+        auto f = s.features().first().toMap();
+        QVERIFY(!f.contains("epsg"));
+        QCOMPARE(f["frame"].toString(), "Unknown");
+        QCOMPARE(f["localOrigin"].toMap(), a);
+        QVERIFY(s.followLine(name, 1, 2, "Right edge", 0, false));
+        auto right = s.guidePaths()["right"].toList().first().toMap();
+        // Two metres to the right of a northbound line is east, also in the southern hemisphere.
+        double east = (right["longitudeDeg"].toDouble() - 151) * 111320 * std::cos(qDegreesToRadians(33.));
+        QVERIFY(std::abs(east - 2) < .01);
     }
     void levelCalibration() {
         QCOMPARE(DeviceLevel::angles({0, 1, 0}, {0, 1, 0}), QPointF());
@@ -217,11 +380,11 @@ class CollectorTest : public QObject {
         auto caster = mock.readLine().trimmed();
         QVERIFY(s.start(path, caster, "", ""));
         QTRY_VERIFY_WITH_TIMEOUT(s.state()["canStore"].toBool(), 10000);
+        const auto ground = s.state()["live"].toMap()["groundCgvd2013M"].toDouble();
+        QVERIFY(s.setGrade("Manual", ground - .450, "CGVD2013", .02, true, ""));
         auto pointer = window->findChild<QQuickItem *>("gradePointer");
         auto track = window->findChild<QQuickItem *>("gradeTrack");
         QVERIFY(pointer && track);
-        const auto ground = s.state()["live"].toMap()["groundCgvd2013M"].toDouble();
-        QVERIFY(s.setGrade("Manual", ground - .450, "CGVD2013", .02, true, ""));
         QTRY_VERIFY(pointer->isVisible() && track->height() > 100);
         QTRY_VERIFY(qAbs(pointer->y() + pointer->height() / 2 - track->y()) < 1);
         QVERIFY(s.state()["grade"].toMap()["cutMinusFillM"].toDouble() > .25);
@@ -486,41 +649,209 @@ class CollectorTest : public QObject {
         auto w = qobject_cast<QQuickWindow *>(ui.rootObjects().first());
         auto prefs = w->findChild<QObject *>("displayPreferences");
         QVERIFY(prefs);
+        auto tools = w->findChild<QObject *>("fieldTools");
+        QVERIFY(tools);
+        auto showTool = [&](QString t, QString n) {
+            QVERIFY(QMetaObject::invokeMethod(tools, "start", Q_ARG(QVariant, t), Q_ARG(QVariant, n)));
+            QTRY_VERIFY(tools->property("opened").toBool());
+        };
+        showTool("Coverage", "");
+        const auto shortHeight = tools->property("height").toReal();
+        QVERIFY(shortHeight < w->height() * .7);
+        QMetaObject::invokeMethod(tools, "close");
+        QTRY_VERIFY(!tools->property("visible").toBool());
+        showTool("DXF", "");
+        QVERIFY(QMetaObject::invokeMethod(tools, "inspect", Q_ARG(QVariant, QString(""))));
+        auto confirm = tools->findChild<QObject *>("confirmDxfReference");
+        auto commit = tools->findChild<QObject *>("commitDxf");
+        QVERIFY(confirm && commit);
+        confirm->setProperty("checked", true);
+        QTRY_VERIFY(commit->property("enabled").toBool());
+        QVERIFY(QMetaObject::invokeMethod(commit, "clicked"));
+        QTRY_COMPARE(s.features().size(), 2);
+        QTRY_VERIFY(!tools->property("visible").toBool());
+        w->setWidth(390);
+        w->setHeight(640);
+        showTool("Follow", s.features().first().toMap()["name"].toString());
+        QVERIFY(tools->property("height").toReal() > shortHeight);
+        auto chooser = tools->findChild<QQuickItem *>("featureChooser");
+        QVERIFY(chooser);
+        auto popup = chooser->property("popup").value<QObject *>();
+        QVERIFY(popup);
+        QMetaObject::invokeMethod(popup, "open");
+        QTRY_VERIFY(popup->property("opened").toBool());
+        auto view = popup->property("contentItem").value<QQuickItem *>();
+        QVERIFY(view);
+        auto listContent = view->property("contentItem").value<QQuickItem *>();
+        QVERIFY(listContent);
+        auto namedOptions = [&] {
+            QStringList names;
+            for (auto child : listContent->childItems())
+                if (!child->property("text").toString().isEmpty())
+                    names << child->property("text").toString();
+            return names;
+        };
+        QTRY_VERIFY(namedOptions().contains(s.features().last().toMap()["name"].toString()));
+        QMetaObject::invokeMethod(popup, "close");
+        QTRY_VERIFY(!popup->property("visible").toBool());
+        auto follow = tools->findChild<QQuickItem *>("commitFollowing");
+        QVERIFY(follow && follow->property("enabled").toBool());
+        auto side = tools->findChild<QQuickItem *>("offsetSide");
+        auto offset = tools->findChild<QObject *>("offsetDistance");
+        auto scroll = tools->property("contentItem").value<QQuickItem *>();
+        QVERIFY(side && offset && scroll);
+        QTRY_VERIFY(scroll->property("contentHeight").toReal() <= scroll->height() + 1);
+        auto chooseSide = [&](QString text) {
+            for (auto b : side->childItems())
+                if (b->property("text").toString() == text) {
+                    QVERIFY(b->width() >= 56 && b->height() >= 56);
+                    QTest::mouseClick(w, Qt::LeftButton, {},
+                                      b->mapToScene(b->boundingRect().center()).toPoint());
+                    QTRY_COMPARE(side->property("currentText").toString(), text);
+                    return;
+                }
+            QFAIL("Visible side choice missing");
+        };
+        chooseSide("Left");
+        offset->setProperty("text", "0.50");
+        // In a short landscape window only the body scrolls; the commit button remains tappable.
+        w->setHeight(365);
+        QTRY_VERIFY(scroll->property("contentHeight").toReal() > scroll->height());
+        auto action = follow->mapToScene(follow->boundingRect().center()).toPoint();
+        QVERIFY(w->contentItem()->boundingRect().contains(action));
+        QTest::mouseClick(w, Qt::LeftButton, {}, action);
+        QTRY_COMPARE(s.fieldPrefs()["offsetM"].toDouble(), -.5);
+        QTRY_VERIFY(!tools->property("visible").toBool());
+        w->setHeight(640);
+        showTool("Follow", QString());
+        QCOMPARE(side->property("currentText").toString(), "Left");
+        chooseSide("Right");
+        QVERIFY(QMetaObject::invokeMethod(follow, "clicked"));
+        QCOMPARE(s.fieldPrefs()["offsetM"].toDouble(), .5);
+        QTRY_COMPARE(w->property("page").toInt(), 2);
+        QTRY_VERIFY(!tools->property("visible").toBool());
         prefs->setProperty("appearance", "Daylight");
         w->setProperty("page", 2);
         w->resize(1050, 760);
         QVERIFY(s.practice());
         QTRY_VERIFY(s.state()["fresh"].toBool());
+        auto puck = w->findChild<QQuickItem *>("crossTrackRover");
+        auto chart = w->findChild<QQuickItem *>("crossTrackChart");
+        QVERIFY(puck && chart);
+        QTRY_VERIFY(puck->isVisible() && puck->x() + puck->width() / 2 < chart->width() / 2);
+        QVERIFY(s.followLine(s.fieldPrefs()["follow"].toString(), -.5, 0, "Centre", 0, false));
+        QTRY_VERIFY(puck->x() + puck->width() / 2 > chart->width() / 2);
         auto coords = w->findChild<QQuickItem *>("positionCoordinates");
         auto height = w->findChild<QQuickItem *>("groundElevation");
         QVERIFY(coords && height);
         QVERIFY(coords->property("text").toString().contains("45.285"));
         QVERIFY(height->property("text").toString().contains("CGVD2013"));
         prefs->setProperty("showGrade", false);
-        QTRY_VERIFY(!w->findChild<QQuickItem *>("gradeTrack")->isVisible());
+        QTRY_VERIFY(!w->findChild<QQuickItem *>("gradeTrack") ||
+                    !w->findChild<QQuickItem *>("gradeTrack")->isVisible());
         QVERIFY(coords->isVisible() && height->isVisible());
         QVERIFY(s.store("P1", "grade hidden"));
         QCOMPARE(s.points().first().toMap()["gradeMode"].toString(), "Manual");
+        auto click = [&](const char *name) {
+            for (auto button : w->findChildren<QQuickItem *>(name))
+                if (button->isVisible()) {
+                    QVERIFY(button->isEnabled());
+                    QVERIFY(QMetaObject::invokeMethod(button, "clicked"));
+                    return;
+                }
+            QFAIL(name);
+        };
+        // Build one feature across both entry points. No EPSG is present in this job's frame.
+        click("mapNewLine");
+        auto draft = w->findChild<QObject *>("featureDraft");
+        QVERIFY(draft);
+        auto map = w->findChild<QQuickItem *>("workMap");
+        QVERIFY(map);
+        QTRY_VERIFY(draft->property("active").toBool() && map->width() > 900);
+        // The only saved point is the map origin. A tap there must keep its survey identity.
+        auto tapAt = [&](QPointF p) {
+            QTest::mouseClick(w, Qt::LeftButton, {}, map->mapToScene(p).toPoint());
+        };
+        tapAt({map->width() / 2, map->height() / 2});
+        QTRY_COMPARE(draft->property("vertices").value<QJSValue>().toVariant().toList().size(), 1);
+        QCOMPARE(draft->property("vertices")
+                     .value<QJSValue>()
+                     .toVariant()
+                     .toList()
+                     .first()
+                     .toMap()["id"]
+                     .toString(),
+                 "P1");
+        QMetaObject::invokeMethod(draft, "remove", Q_ARG(QVariant, 0));
+        QTest::mouseClick(w, Qt::LeftButton, {},
+                          map->mapToScene(QPointF(map->width() * .65, map->height() * .45)).toPoint());
+        QTRY_COMPARE(draft->property("vertices").value<QJSValue>().toVariant().toList().size(), 1);
+        w->setProperty("page", 3);
+        auto list = w->findChild<QQuickItem *>("pointList");
+        QTRY_VERIFY(list->isVisible());
+        QTest::mouseClick(w, Qt::LeftButton, {}, list->mapToScene(QPointF(36, 25)).toPoint());
+        QTRY_COMPARE(draft->property("vertices").value<QJSValue>().toVariant().toList().size(), 2);
+        click("reviewLine");
+        QTRY_VERIFY(w->findChild<QObject *>("featureDraft")->property("active").toBool());
+        QTest::qWait(180);
+        click("saveDraftLine");
+        QTRY_VERIFY(!draft->property("active").toBool());
+        auto mixed = s.features().last().toMap();
+        for (auto v : s.features())
+            if (v.toMap()["source"] == "Points + map sketch")
+                mixed = v.toMap();
+        QCOMPARE(mixed["source"].toString(), "Points + map sketch");
+        QCOMPARE(mixed["pointIds"].toStringList().last(), "P1");
+        click("listNewLine");
+        QTRY_VERIFY(draft->property("active").toBool());
+        QMetaObject::invokeMethod(draft, "cancel");
+        w->setProperty("page", 2);
+        prefs->setProperty("showGrade", true);
+        auto gradeWindow = w->findChild<QQuickWindow *>("gradeWindow");
+        QVERIFY(gradeWindow);
+        click("gradeWindowPlacement");
+        QTRY_VERIFY(gradeWindow->isVisible());
+        QTRY_COMPARE(w->findChild<QQuickItem *>("gradeTrack")->window(), gradeWindow);
+        click("gradeWindowPlacement");
+        QTRY_VERIFY(!gradeWindow->isVisible());
+        QCOMPARE(w->findChild<QQuickItem *>("gradeTrack")->window(), w);
         prefs->setProperty("showSurface", true);
         auto preview = w->findChild<QQuickWindow *>("surfaceWindow");
         QVERIFY(preview);
+        QTRY_VERIFY(!preview->isVisible());
+        QTRY_VERIFY(w->findChild<TinItem *>() && w->findChild<TinItem *>()->height() >= 80);
+        click("surfaceWindowPlacement");
         QTRY_VERIFY(preview->isVisible());
-        QTRY_VERIFY(preview->findChild<TinItem *>());
-        auto tin = preview->findChild<TinItem *>();
+        QTRY_VERIFY(w->findChild<TinItem *>());
+        auto tin = w->findChild<TinItem *>();
         QTRY_VERIFY(tin->mesh().contains("faces"));
         QVERIFY(tin->rover().contains("up"));
-        QTRY_VERIFY(tin->width()>2 && tin->height()>2);
+        QTRY_VERIFY(tin->width() > 2 && tin->height() > 2);
         QImage image(tin->size().toSize(), QImage::Format_RGB32);
         QVERIFY(!image.isNull());
         QPainter p(&image);
         tin->paint(&p);
         p.end();
         QVERIFY(image.pixelColor(image.width() / 2, image.height() / 2) != image.pixelColor(0, 0));
+        click("surfaceWindowPlacement");
+        QTRY_VERIFY(!preview->isVisible());
+        QCOMPARE(tin->window(), w);
+        auto surfaceDock = w->findChild<QQuickItem *>("surfaceDock");
+        QVERIFY(surfaceDock);
+        surfaceDock->setProperty("mobile", true);
+        click("surfaceWindowPlacement");
+        QTRY_VERIFY(prefs->property("surfaceFloating").toBool());
+        QVERIFY(!preview->isVisible());
+        QVERIFY(tin->isVisible());
+        QCOMPARE(tin->window(), w);
+        click("surfaceWindowPlacement");
+        QTRY_VERIFY(!prefs->property("surfaceFloating").toBool());
         prefs->setProperty("appearance", "Dark");
         QTRY_VERIFY(!w->property("daylight").toBool());
         prefs->setProperty("showSurface", false);
         QTRY_VERIFY(!preview->isVisible());
         s.stop();
+        QTRY_VERIFY(!puck->isVisible());
         QVERIFY(w->findChild<QQuickItem *>("positionStatus")
                     ->property("text")
                     .toString()

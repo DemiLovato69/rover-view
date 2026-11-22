@@ -20,6 +20,8 @@ ApplicationWindow {
         property bool showLevel: true
         property string groundDatum: "CGVD2013"
         property bool showSurface: false
+        property bool gradeFloating: false
+        property bool surfaceFloating: false
     }
     readonly property bool daylight: prefs.appearance === "Daylight" || (prefs.appearance === "Auto" && Qt.styleHints.colorScheme !== Qt.ColorScheme.Dark)
     readonly property color ink: daylight ? "#13272e" : "#eef3f5"
@@ -43,12 +45,12 @@ ApplicationWindow {
     property var occ: s.occupation
     property bool occupying: occ.id !== undefined
     property bool wide: width >= 790 && width > height
-    readonly property bool grading: prefs.showGrade
-    readonly property bool floatingSurface: Qt.platform.os !== "android" && Qt.platform.os !== "ios"
+    readonly property bool grading: prefs.showGrade && !!s.grade.gradeMode
     readonly property bool positioned: Number.isFinite(live.latitudeDeg) && Number.isFinite(live.longitudeDeg)
     readonly property var ground: prefs.groundDatum === "CGVD2013" ? live.groundCgvd2013M : live.groundEllipsoidM
     readonly property bool showBubble: prefs.showLevel && deviceLevel.supported
     property int page: 0
+    property bool featuresShown: false
     property var titles: ["Connect", "Job", "Work View", "Points List", "Settings & Logs"]
     property string pointName: "P001"
     property string pointCode: ""
@@ -58,7 +60,21 @@ ApplicationWindow {
         if (page === 1 && !s.job && collector.jobs.length)
             collector.openJob(collector.jobs[0]); // The backend restores the last job; recover if that job no longer exists.
     }
-    onActiveJobChanged: Qt.callLater(suggestId)
+    LineDraft {
+        id: draft
+        objectName: "featureDraft"
+    }
+    readonly property var lineDraft: draft
+    function startLine(destination) {
+        draft.begin();
+        featuresShown = false;
+        page = destination;
+    }
+    onActiveJobChanged: {
+        Qt.callLater(suggestId);
+        if (draft)
+            draft.cancel();
+    }
     Component.onCompleted: suggestId()
     function suggestId() {
         let last = collector.points.length ? collector.points[0] : null;
@@ -190,63 +206,6 @@ ApplicationWindow {
             }
         }
     }
-    component PreviewPanel: Rectangle {
-        id: previewPanel
-        color: win.panel
-        border.color: win.line
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 8
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    text: "3D SURFACE   /   " + (s.surfaceName || "No design loaded")
-                    color: win.ink
-                    font.bold: true
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                }
-                FieldButton {
-                    text: "×"
-                    Accessible.name: "Close surface preview"
-                    onClicked: prefs.showSurface = false
-                }
-            }
-            Loader {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                active: previewPanel.visible && win.page === 2 && prefs.showSurface && !!s.hasSurface
-                sourceComponent: SurfacePreview {
-                    mesh: collector.surfaceMesh
-                    rover: s.surfacePosition || ({})
-                    daylight: win.daylight
-                }
-            }
-            Caption {
-                visible: !s.hasSurface
-                text: "Open Grade & surface setup to import a LandXML design."
-            }
-        }
-    }
-    Window {
-        id: surfaceWindow
-        objectName: "surfaceWindow"
-        title: "Field Rover · Surface preview"
-        transientParent: win
-        width: 420
-        height: 300
-        flags: Qt.Tool | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
-        visible: win.visible && win.page === 2 && prefs.showSurface && win.floatingSurface
-        onClosing: prefs.showSurface = false
-        PreviewPanel {
-            anchors.fill: parent
-            visible: surfaceWindow.visible
-            Material.theme: win.Material.theme
-            Material.accent: win.accent
-            Material.foreground: win.ink
-            Material.background: win.panel
-        }
-    }
     header: ColumnLayout {
         spacing: 0
         RowLayout {
@@ -336,8 +295,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     font.family: "monospace"
                     font.pixelSize: win.wide ? 18 : 15
-                    horizontalAlignment: positionStrip.columns===2?Text.AlignRight:Text.AlignLeft
-                    text:"LON\n"+fmt(live.longitudeDeg,8)+"°"
+                    horizontalAlignment: positionStrip.columns === 2 ? Text.AlignRight : Text.AlignLeft
+                    text: "LON\n" + fmt(live.longitudeDeg, 8) + "°"
                 }
             }
         }
@@ -404,121 +363,171 @@ ApplicationWindow {
         currentIndex: [1, 2, 0, 3, 4][page]
         ColumnLayout {
             spacing: 8
-            RowLayout {
+            WorkToolbar {
+                visible: !draft.active
                 Layout.fillWidth: true
-                Caption {
-                    font.pixelSize: 14
-                    text: (live.used ?? "—") + " SV used   ·   Corrections " + fmt(live.ageS, 1) + " s   ·   Pole " + (s.job ? fmt(s.pole, 3) + " m" : "—") + (live.source ? "   /   " + live.source : "")
-                }
-                FieldButton {
-                    text: "Instruments ▾"
-                    implicitHeight: 56
-                    onClicked: instruments.open()
-                    Menu {
-                        id: instruments
-                        x: parent.width - width
-                        y: parent.height
-                        MenuItem {
-                            objectName: "toggleGrade"
-                            implicitHeight: 56
-                            text: "Grade bar"
-                            checkable: true
-                            checked: prefs.showGrade
-                            onTriggered: prefs.showGrade = checked
-                        }
-                        MenuItem {
-                            objectName: "toggleBubble"
-                            implicitHeight: 56
-                            text: deviceLevel.supported ? "Bubble level" : "No level sensor"
-                            enabled: deviceLevel.supported
-                            checkable: true
-                            checked: win.showBubble
-                            onTriggered: prefs.showLevel = checked
-                        }
-                        MenuItem {
-                            objectName: "toggleSurface"
-                            implicitHeight: 56
-                            text: "3D surface preview"
-                            checkable: true
-                            checked: prefs.showSurface
-                            onTriggered: prefs.showSurface = checked
-                        }
-                        MenuSeparator {}
-                        MenuItem {
-                            text: "Grade & surface setup…"
-                            implicitHeight: 56
-                            enabled: !!s.job && !win.occupying
-                            onTriggered: gradeSetup.open()
-                        }
+                jobOpen: !!s.job
+                occupying: win.occupying
+                gradeOn: grading
+                surfaceOn: prefs.showSurface && !!s.hasSurface
+                hasSurface: !!s.hasSurface
+                hasGradeTarget: !!s.grade.gradeMode
+                levelOn: win.showBubble
+                levelSupported: deviceLevel.supported
+                onAction: cmd => {
+                    switch (cmd) {
+                    case "newLine":
+                        win.startLine(2);
+                        break;
+                    case "follow":
+                        fieldTools.start("Follow", "");
+                        break;
+                    case "coverage":
+                        fieldTools.start("Coverage", "");
+                        break;
+                    case "design":
+                        gradeSetup.open();
+                        break;
+                    case "grade":
+                        if (!s.grade.gradeMode) {
+                            prefs.showGrade = true;
+                            gradeSetup.open();
+                        } else
+                            prefs.showGrade = !prefs.showGrade;
+                        break;
+                    case "surface":
+                        if (!s.hasSurface) {
+                            prefs.showSurface = true;
+                            gradeSetup.openForSurface();
+                        } else
+                            prefs.showSurface = !prefs.showSurface;
+                        break;
+                    case "level":
+                        prefs.showLevel = !prefs.showLevel;
+                        break;
                     }
                 }
             }
-            ScrollView {
-                id: workScroll
+            Item {
+                id: workspace
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: 0
                 clip: true
-                contentWidth: availableWidth
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                GridLayout {
-                    id: instrumentsGrid
-                    width: workScroll.availableWidth
-                    columns: wide ? 2 : 1
-                    readonly property real mapHeight: workScroll.availableHeight - (win.showBubble && !grading ? levelCard.implicitHeight + rowSpacing : 0) - (!wide && grading ? gradeDisplay.implicitHeight + rowSpacing : 0)
-                    FieldPlot {
-                        id: fieldMap
-                        readonly property bool insetFits: width >= 420 && height >= 265
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredHeight: Math.max(155, instrumentsGrid.mapHeight)
-                        Layout.preferredWidth: 560
-                        Layout.columnSpan: wide && !grading ? 2 : 1
-                        PreviewPanel {
-                            objectName: "surfaceInset"
-                            visible: prefs.showSurface && !win.floatingSurface && fieldMap.insetFits
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: 6
-                            anchors.topMargin: 34
-                            width: Math.min(300, parent.width * .48)
-                            height: Math.min(215, parent.height - 122)
+                readonly property bool hasGrade: grading && !prefs.gradeFloating && !draft.active
+                readonly property bool has3D: prefs.showSurface && !!s.hasSurface && !prefs.surfaceFloating && !draft.active
+                readonly property bool hasLine: !!s.line.name && !draft.active
+                readonly property bool pairedBelow: !wide && width >= 520 && hasGrade && hasLine
+                ScrollView {
+                    id: workScroll
+                    anchors.fill: parent
+                    clip: true
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    GridLayout {
+                        width: workScroll.availableWidth
+                        height: Math.max(workScroll.availableHeight, Layout.minimumHeight)
+                        columns: wide ? (workspace.hasLine && workspace.hasGrade ? 3 : 2) : workspace.pairedBelow ? 2 : 1
+                        rowSpacing: 4
+                        columnSpacing: 6
+                        FieldPlot {
+                            id: fieldMap
+                            objectName: "workMap"
+                            Layout.columnSpan: workspace.pairedBelow ? 2 : 1
+                            draft: win.lineDraft
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: workspace.hasLine ? 420 : 570
+                            Layout.preferredHeight: wide ? 320 : 150
+                            Layout.minimumHeight: wide ? 110 : 100
+                            Layout.row: 0
+                            Layout.column: 0
+                            onFeatureTapped: name => fieldTools.start("Follow", name)
                         }
-                    }
-                    GradeBar {
-                        id: gradeDisplay
-                        visible: grading
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 400
-                        Layout.preferredHeight: implicitHeight
-                        grade: s.grade
-                        levelGauge: win.showBubble ? bubbleGauge : null
-                    }
-                    Rectangle {
-                        id: levelCard
-                        visible: win.showBubble && !grading
-                        Layout.fillWidth: true
-                        implicitHeight: 78
-                        color: win.panel
-                        border.color: win.line
-                        radius: 3
+                        InstrumentDock {
+                            title: "GRADE   /   mm"
+                            windowName: "gradeWindow"
+                            shown: grading && !draft.active
+                            floating: prefs.gradeFloating
+                            workVisible: page === 2 && !draft.active
+                            floatLayer: workspace
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: workspace.hasLine ? 330 : 400
+                            Layout.minimumHeight: win.showBubble ? 324 : 242
+                            Layout.preferredHeight: 280
+                            Layout.row: wide ? 0 : 1
+                            Layout.column: wide ? 1 : 0
+                            Layout.rowSpan: wide && workspace.has3D ? 2 : 1
+                            onChangePlacement: prefs.gradeFloating = !prefs.gradeFloating
+                            onHideInstrument: prefs.showGrade = false
+                            instrument: GradeBar {
+                                grade: s.grade
+                                levelGauge: win.showBubble ? bubbleGauge : null
+                            }
+                        }
+                        InstrumentDock {
+                            title: "3D  /  " + (s.surfaceName || "Surface")
+                            objectName: "surfaceDock"
+                            windowName: "surfaceWindow"
+                            shown: prefs.showSurface && s.hasSurface && !draft.active
+                            floating: prefs.surfaceFloating
+                            bottomFloat: true
+                            workVisible: page === 2 && !draft.active
+                            floatLayer: workspace
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 400
+                            Layout.minimumHeight: 180
+                            Layout.preferredHeight: 230
+                            Layout.column: wide && !workspace.hasGrade && !workspace.hasLine ? 1 : 0
+                            Layout.row: wide ? (workspace.hasGrade || workspace.hasLine ? 1 : 0) : 1 + Number(workspace.hasGrade) + Number(workspace.hasLine)
+                            onChangePlacement: prefs.surfaceFloating = !prefs.surfaceFloating
+                            onHideInstrument: prefs.showSurface = false
+                            instrument: SurfacePreview {
+                                mesh: collector.surfaceMesh
+                                rover: s.surfacePosition || ({})
+                                daylight: win.daylight
+                            }
+                        }
                         Loader {
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            active: levelCard.visible
+                            visible: !draft.active && win.showBubble && !grading
+                            Layout.row: wide ? 2 : 1 + Number(workspace.has3D) + Number(workspace.hasLine)
+                            Layout.column: 0
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 78
+                            active: visible
                             sourceComponent: bubbleGauge
                         }
+                        LineGauge {
+                            visible: workspace.hasLine
+                            reading: s.line
+                            settings: collector.fieldPrefs
+                            Layout.fillHeight: true
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 245
+                            Layout.minimumWidth: wide ? 175 : 0
+                            Layout.minimumHeight: 215
+                            Layout.row: wide ? 0 : (workspace.hasGrade && !workspace.pairedBelow ? 2 : 1)
+                            Layout.column: wide ? (workspace.hasGrade ? 2 : 1) : (workspace.pairedBelow ? 1 : 0)
+                            Layout.rowSpan: wide && workspace.has3D ? 2 : 1
+                        }
                     }
-                    PreviewPanel {
-                        visible: prefs.showSurface && !win.floatingSurface && !fieldMap.insetFits
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 246
-                    }
+                }
+            }
+            LineEditor {
+                visible: draft.active
+                Layout.fillWidth: true
+                draft: win.lineDraft
+                mapMode: true
+                onSwitchView: {
+                    featuresShown = false;
+                    page = 3;
                 }
             }
             Rectangle {
                 Layout.fillWidth: true
+                visible: !draft.active
                 implicitHeight: dock.implicitHeight + 16
                 color: win.band
                 border.color: win.line
@@ -532,33 +541,43 @@ ApplicationWindow {
                         font.bold: true
                         text: occupying ? "BENCHMARK   /   " + occ.id + "   ·   " + occ.status : !s.job ? "COLLECT   /   Open or create a job" : !s.fresh ? "COLLECT   /   Waiting for a fresh position" : !s.canStore ? "COLLECT   /   Waiting for next observation" : "COLLECT   /   Ready"
                     }
+                    Caption {
+                        font.pixelSize: 13
+                        text: (live.used ?? "—") + " SV   ·   Corrections " + fmt(live.ageS, 1) + " s   ·   Pole " + (s.job ? fmt(s.pole, 3) + " m" : "—") + (live.source ? "   /   " + live.source : "")
+                        maximumLineCount: 1
+                        elide: Text.ElideRight
+                    }
                     GridLayout {
                         visible: !occupying
-                        columns: wide ? 4 : 2
+                        columns: win.width >= 460 ? 4 : 2
                         Layout.fillWidth: true
                         columnSpacing: 8
                         rowSpacing: 0
                         Field {
                             placeholderText: "Point ID"
                             Layout.preferredWidth: 120
+                            Layout.minimumWidth: 56
                             text: win.pointName
                             onTextEdited: win.pointName = text
                         }
                         Field {
                             placeholderText: "Code"
                             Layout.preferredWidth: 120
+                            Layout.minimumWidth: 56
                             text: win.pointCode
                             onTextEdited: win.pointCode = text
                         }
                         Primary {
                             objectName: "storePoint"
-                            text: "Store point"
+                            text: win.width >= 460 && win.width < 600 ? "Store" : "Store point"
+                            Accessible.name: "Store point"
                             enabled: s.canStore && pointName.trim().length > 0
                             onClicked: if (collector.store(pointName, pointCode))
                                 nextId()
                         }
                         Action {
-                            text: "Benchmark…"
+                            text: win.width >= 460 && win.width < 600 ? "Average" : "Benchmark…"
+                            Accessible.name: "Occupy benchmark"
                             enabled: s.connected && s.job.length > 0
                             onClicked: setup.open()
                         }
@@ -718,6 +737,11 @@ ApplicationWindow {
                     enabled: !!s.job && !occupying
                     onClicked: gradeSetup.open()
                 }
+                Action {
+                    text: "Preview & export surveyed surface…"
+                    enabled: !!s.job
+                    onClicked: fieldTools.start("Surface", "")
+                }
                 Primary {
                     text: s.job ? "Resume " + s.job + " →" : "Continue to Work View →"
                     onClicked: page = 2
@@ -792,15 +816,35 @@ ApplicationWindow {
             }
         }
         ColumnLayout {
-            Title {
-                text: "Saved points · " + collector.points.length
+            RowLayout {
+                Layout.fillWidth: true
+                Action {
+                    text: "Points · " + collector.points.length
+                    highlighted: !win.featuresShown
+                    onClicked: win.featuresShown = false
+                }
+                Action {
+                    text: "Features · " + collector.features.length
+                    enabled: !draft.active
+                    highlighted: win.featuresShown
+                    onClicked: win.featuresShown = true
+                }
             }
             Field {
                 id: search
+                visible: !win.featuresShown
                 placeholderText: "Search ID or code"
+            }
+            Action {
+                objectName: "listNewLine"
+                text: "New line from points"
+                visible: !win.featuresShown && !draft.active
+                enabled: !!s.job && !occupying
+                onClicked: win.startLine(3)
             }
             ListView {
                 objectName: "pointList"
+                visible: !win.featuresShown
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -823,6 +867,7 @@ ApplicationWindow {
                     height: match ? 60 : 0
                     visible: match
                     Accessible.name: modelData.kind + " " + modelData.id + ", " + modelData.quality
+                    property int sequence: draft.active ? draft.vertices.findIndex(v => v.id === modelData.id) : -1
                     contentItem: RowLayout {
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -847,7 +892,7 @@ ApplicationWindow {
                             text: String(modelData.quality).toUpperCase()
                         }
                         Label {
-                            text: "›"
+                            text: !draft.active ? "›" : sequence >= 0 ? "#" + (sequence + 1) : "+"
                             font.pixelSize: 24
                             color: win.accent
                         }
@@ -857,6 +902,10 @@ ApplicationWindow {
                         border.color: win.line
                     }
                     onClicked: {
+                        if (draft.active) {
+                            draft.append(modelData);
+                            return;
+                        }
                         detail.record = modelData;
                         detail.open();
                     }
@@ -864,8 +913,48 @@ ApplicationWindow {
             }
             Action {
                 text: "Export points as CSV…"
+                visible: !win.featuresShown && !draft.active
                 enabled: collector.points.length > 0
                 onClicked: fileDialog.open()
+            }
+            LineEditor {
+                visible: draft.active
+                Layout.fillWidth: true
+                draft: win.lineDraft
+                onSwitchView: page = 2
+            }
+            RowLayout {
+                visible: win.featuresShown
+                Layout.fillWidth: true
+                Action {
+                    text: "New from points…"
+                    enabled: !!s.job && !occupying
+                    onClicked: win.startLine(3)
+                }
+                Action {
+                    text: "Import DXF…"
+                    enabled: !!s.job
+                    onClicked: fieldTools.start("DXF", "")
+                }
+            }
+            ListView {
+                visible: win.featuresShown
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: collector.features
+                Label {
+                    anchors.centerIn: parent
+                    visible: !collector.features.length
+                    text: "Create an ordered line or import a DXF."
+                }
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 64
+                    text: modelData.name + "   /   " + modelData.source + "   ·   " + (modelData.path.length - 1) + " seg   ›"
+                    onClicked: fieldTools.start("Follow", modelData.name)
+                }
             }
         }
         Sheet {
@@ -1034,25 +1123,17 @@ ApplicationWindow {
         checkResult.comparison = collector.controlCheck(id);
         checkResult.open();
     }
-    Dialog {
+    FieldDialog {
         id: checkResult
         property string pointId: ""
         property var comparison: ({})
         title: "Check · " + pointId
-        anchors.centerIn: parent
-        modal: true
-        width: Math.min(win.width - 24, 460)
-        standardButtons: Dialog.Close
-        footer: TouchFooter {}
-        ColumnLayout {
-            width: parent.width
-            Caption {
-                text: checkResult.comparison.status || "Unavailable"
-                font.bold: true
-            }
-            Caption {
-                text: "Horizontal distance   " + fmt(checkResult.comparison.horizontalM, 3) + " m\nVertical difference   " + fmt(checkResult.comparison.verticalM, 3) + " m\nDatum   " + (checkResult.comparison.datum || "—")
-            }
+        Caption {
+            text: checkResult.comparison.status || "Unavailable"
+            font.bold: true
+        }
+        Caption {
+            text: "Horizontal distance   " + fmt(checkResult.comparison.horizontalM, 3) + " m\nVertical difference   " + fmt(checkResult.comparison.verticalM, 3) + " m\nDatum   " + (checkResult.comparison.datum || "—")
         }
     }
     FileDialog {
@@ -1061,154 +1142,132 @@ ApplicationWindow {
         nameFilters: ["Raster MBTiles (*.mbtiles *.MBTILES)", "All files (*)"]
         onAccepted: basemap.importTiles(selectedFile)
     }
-    Dialog {
+    FieldDialog {
         id: setup
-        anchors.centerIn: parent
-        width: Math.min(win.width - 24, 420)
-        modal: true
         title: "Occupy benchmark"
-        standardButtons: Dialog.Cancel
-        footer: TouchFooter {}
-        ColumnLayout {
-            width: parent.width
-            Caption {
-                text: "Keep the pole stationary. Only qualifying epochs count."
-            }
-            Field {
-                id: benchId
-                text: win.pointName
-                placeholderText: "Benchmark ID"
-            }
-            Caption {
-                text: "Qualifying duration (seconds)"
-            }
-            Field {
-                id: duration
-                text: "30"
-                inputMethodHints: Qt.ImhDigitsOnly
-                validator: IntValidator {
-                    bottom: 1
-                    top: 3600
-                }
-            }
-            CheckBox {
-                id: allowFloat
-                text: "Accept float (bench testing)"
-                implicitHeight: 56
-            }
-            Primary {
-                text: "Start occupation"
-                enabled: duration.acceptableInput
-                onClicked: if (collector.occupy(benchId.text, pointCode, Number(duration.text), allowFloat.checked)) {
-                    win.pointName = benchId.text;
-                    setup.close();
-                }
+        primaryText: "Start occupation"
+        primaryEnabled: duration.acceptableInput && !!benchId.text.trim()
+        onPrimaryAction: {
+            if (collector.occupy(benchId.text, pointCode, Number(duration.text), allowFloat.checked)) {
+                win.pointName = benchId.text;
+                close();
+            } else
+                problem = collector.state.notice;
+        }
+        Caption {
+            text: "Keep the pole stationary. Only qualifying epochs count."
+        }
+        Field {
+            id: benchId
+            text: win.pointName
+            placeholderText: "Benchmark ID"
+        }
+        Caption {
+            text: "Qualifying duration (seconds)"
+        }
+        Field {
+            id: duration
+            text: "30"
+            inputMethodHints: Qt.ImhDigitsOnly
+            validator: IntValidator {
+                bottom: 1
+                top: 3600
             }
         }
-        onOpened: benchId.text = pointName
+        CheckBox {
+            id: allowFloat
+            text: "Accept float (bench testing)"
+            implicitHeight: 56
+        }
+        onAboutToShow: {
+            problem = "";
+            benchId.text = pointName;
+        }
     }
-    Dialog {
+    FieldDialog {
         id: confirmDiscard
-        anchors.centerIn: parent
-        modal: true
         title: "Discard this occupation?"
-        standardButtons: Dialog.Discard | Dialog.Cancel
-        footer: TouchFooter {}
-        onDiscarded: collector.discard()
+        Caption {
+            text: "The unsaved occupation and its accepted epochs will be discarded."
+        }
+        primaryText: "Discard"
+        destructive: true
+        onPrimaryAction: {
+            collector.discard();
+            close();
+        }
     }
-    Dialog {
+    FieldDialog {
         id: detail
         objectName: "pointDetail"
         property var record: ({})
         property var epochs: []
-        property bool showEpochs: false
-        anchors.centerIn: parent
-        modal: true
-        width: Math.min(win.width - 24, 520)
-        height: Math.min(win.height - 48, 620)
+        property alias tab: detailTabs.currentIndex
+        preferredWidth: 580
         title: (record.kind || "") + " · " + (record.id || "")
-        standardButtons: Dialog.Close
-        footer: TouchFooter {}
-        onOpened: {
-            showEpochs = false;
+        secondaryText: "Delete " + (record.kind || "point").toLowerCase() + "…"
+        secondaryName: "requestDelete"
+        onSecondaryAction: removeRecord.open()
+        onAboutToShow: {
+            tab = 0;
             epochs = collector.epochsFor(record.id);
         }
-        ColumnLayout {
-            anchors.fill: parent
-            Caption {
-                text: (detail.record.quality || "") + "   ·   " + (detail.record.gpst || "") + " GPST"
-            }
-            Action {
-                visible: detail.epochs.length > 0
-                text: detail.showEpochs ? "Show summary" : "Inspect " + detail.epochs.length + " accepted epochs"
-                onClicked: detail.showEpochs = !detail.showEpochs
-            }
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                model: detail.showEpochs ? detail.epochs : Object.keys(detail.record)
-                delegate: Label {
-                    required property var modelData
-                    width: ListView.view.width
-                    padding: 6
-                    wrapMode: Text.WordWrap
-                    text: typeof modelData === "string" ? modelData + ":  " + detail.record[modelData] : modelData.gpst + " GPST · " + modelData.quality + "\n" + fmt(modelData.latitudeDeg, 8) + "°, " + fmt(modelData.longitudeDeg, 8) + "° · h " + fmt(modelData.ellipsoidM, 3) + " m"
-                }
-            }
-            Action {
-                objectName: "requestDelete"
-                text: "Delete " + (detail.record.kind || "point").toLowerCase() + "…"
-                danger: true
-                onClicked: removeRecord.open()
-            }
-            Action {
-                text: "Check rover against this point"
-                onClicked: win.checkPoint(detail.record.id)
+        Caption {
+            text: (detail.record.quality || "") + "   ·   " + (detail.record.gpst || "") + " GPST"
+        }
+        ChoiceStrip {
+            id: detailTabs
+            Layout.fillWidth: true
+            choices: detail.epochs.length ? ["Summary", "All fields", "Epochs"] : ["Summary", "All fields"]
+        }
+        Caption {
+            visible: detail.tab === 0
+            text: "Latitude   " + fmt(detail.record.latitudeDeg, 8) + "°\nLongitude   " + fmt(detail.record.longitudeDeg, 8) + "°\nGround (CGVD2013)   " + fmt(detail.record.groundCgvd2013M, 3) + " m\nGround (ellipsoid)   " + fmt(detail.record.groundEllipsoidM, 3) + " m"
+        }
+        ListView {
+            visible: detail.tab > 0
+            Layout.fillWidth: true
+            implicitHeight: Math.min(230, count * 48)
+            clip: true
+            model: detail.tab === 2 ? detail.epochs : Object.keys(detail.record)
+            delegate: Label {
+                required property var modelData
+                width: ListView.view.width
+                padding: 6
+                wrapMode: Text.WordWrap
+                text: typeof modelData === "string" ? modelData + ":  " + detail.record[modelData] : modelData.gpst + " GPST · " + modelData.quality + "\n" + fmt(modelData.latitudeDeg, 8) + "°, " + fmt(modelData.longitudeDeg, 8) + "° · h " + fmt(modelData.ellipsoidM, 3) + " m"
             }
         }
+        Action {
+            text: detail.record.surfaceIncluded ? "Exclude from surveyed surface" : "Include in surveyed surface"
+            onClicked: if (collector.includeShot(detail.record.job, detail.record.id, detail.record.gpst, !detail.record.surfaceIncluded))
+                detail.close()
+        }
+        Action {
+            text: "Check rover against this point"
+            onClicked: win.checkPoint(detail.record.id)
+        }
     }
-    Dialog {
+    FieldDialog {
         id: removeRecord
         objectName: "deleteDialog"
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(win.width - 24, 460)
         title: "Delete " + (detail.record.kind || "point").toLowerCase() + "?"
-        property string failure: ""
-        onOpened: failure = ""
-        ColumnLayout {
-            width: parent.width
-            Caption {
-                textFormat: Text.PlainText
-                text: "Permanently delete “" + (detail.record.id || "") + "” from job “" + (detail.record.job || "") + "”?" + (detail.record.kind === "Benchmark" ? " This also deletes its " + detail.epochs.length + " accepted epochs." : "")
-            }
-            Caption {
-                visible: !!removeRecord.failure
-                color: win.warning
-                text: removeRecord.failure
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Action {
-                    objectName: "cancelDelete"
-                    text: "Cancel"
-                    onClicked: removeRecord.reject()
-                }
-                Action {
-                    objectName: "confirmDelete"
-                    text: "Delete"
-                    danger: true
-                    onClicked: {
-                        let r = detail.record;
-                        if (collector.deletePoint(r.job, r.id, r.gpst)) {
-                            removeRecord.close();
-                            detail.close();
-                        } else
-                            removeRecord.failure = collector.state.notice;
-                    }
-                }
-            }
+        onAboutToShow: problem = ""
+        primaryText: "Delete"
+        destructive: true
+        primaryName: "confirmDelete"
+        dismissName: "cancelDelete"
+        onPrimaryAction: {
+            let r = detail.record;
+            if (collector.deletePoint(r.job, r.id, r.gpst)) {
+                close();
+                detail.close();
+            } else
+                problem = collector.state.notice;
+        }
+        Caption {
+            textFormat: Text.PlainText
+            text: "Permanently delete “" + (detail.record.id || "") + "” from job “" + (detail.record.job || "") + "”?" + (detail.record.kind === "Benchmark" ? " This also deletes its " + detail.epochs.length + " accepted epochs." : "")
         }
     }
     FileDialog {
@@ -1220,5 +1279,10 @@ ApplicationWindow {
     }
     GradeSetup {
         id: gradeSetup
+    }
+    FieldTools {
+        id: fieldTools
+        objectName: "fieldTools"
+        onFollowingStarted: win.page = 2
     }
 }

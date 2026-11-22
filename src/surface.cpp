@@ -8,6 +8,17 @@
 static constexpr int zones[] = {3154, 3155, 3156, 3157, 2955, 2956, 2957, 3158, 3159,
                                 3160, 2958, 2959, 2960, 2961, 2962, 3761, 9709, 9713};
 
+int Surface::utmZone(int code) {
+    auto it = std::find(std::begin(zones), std::end(zones), code);
+    return it == std::end(zones) ? 0 : 7 + int(it - std::begin(zones));
+}
+std::unique_ptr<PJ, decltype(&proj_destroy)> Surface::utmProjection(int code) {
+    auto zone = utmZone(code);
+    return {zone ? proj_create(nullptr,
+                               QString("+proj=utm +zone=%1 +ellps=GRS80").arg(zone).toLatin1().constData())
+                 : nullptr,
+            proj_destroy};
+}
 QString Surface::read(const QByteArray &xml, const QString &selection) {
     *this = Surface();
     QXmlStreamReader x(xml);
@@ -106,8 +117,7 @@ QString Surface::read(const QByteArray &xml, const QString &selection) {
         return "Expected Metric linearUnit=meter";
     if (names.isEmpty())
         return "No named surfaces in file";
-    auto zone = std::find(std::begin(zones), std::end(zones), epsg);
-    if (zone == std::end(zones))
+    if (!utmZone(epsg))
         return "Expected a NAD83(CSRS) UTM EPSG code (zones 7–24N)";
     if (datum != "CGVD2013" && datum != "Ellipsoid")
         return "Expected verticalCoordinateSystemName CGVD2013 or Ellipsoid";
@@ -116,8 +126,7 @@ QString Surface::read(const QByteArray &xml, const QString &selection) {
     if (faces.isEmpty())
         return "Selected surface has no visible triangles";
     // Use the EPSG's projection directly: offline Android builds need no PROJ database.
-    auto spec = QString("+proj=utm +zone=%1 +ellps=GRS80").arg(7 + (zone - std::begin(zones))).toLatin1();
-    projection.reset(proj_create(nullptr, spec.constData()));
+    projection = utmProjection(epsg);
     if (!projection)
         return "Cannot initialize UTM projection";
     QHash<QPair<int, int>, int> edges;

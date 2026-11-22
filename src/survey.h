@@ -1,6 +1,7 @@
 #pragma once
 #include "link.h"
 #include "surface.h"
+#include "fieldwork.h"
 #include <QElapsedTimer>
 #include <QSqlDatabase>
 #include <QUrl>
@@ -14,6 +15,22 @@ class Survey : public QObject {
     Q_PROPERTY(QVariantList surfaceOutline READ surfaceOutline NOTIFY gradeSetupChanged)
     Q_PROPERTY(QVariantMap surfaceMesh READ surfaceMesh NOTIFY gradeSetupChanged)
     Q_PROPERTY(QStringList events READ events NOTIFY eventsChanged)
+    Q_PROPERTY(QVariantMap fieldPrefs READ fieldPrefs NOTIFY fieldChanged)
+    Q_PROPERTY(QVariantList features READ features NOTIFY fieldChanged)
+    Q_PROPERTY(QVariantMap guidePaths READ guidePaths NOTIFY fieldChanged)
+    Q_PROPERTY(QVariantMap terrainPreview READ terrainPreview NOTIFY previewChanged)
+    QVariantMap workPrefs, paths, tinPreview;
+    QVariantList featureRows;
+    QByteArray previewXml;
+    Fieldwork::Drawing pendingDrawing;
+    Fieldwork::Guide guide;
+    std::unique_ptr<PJ, decltype(&proj_destroy)> guideProjection{nullptr, proj_destroy};
+    void loadFieldwork();
+    void rebuildGuide();
+    bool saveFieldPrefs(const QVariantMap &prefs);
+    bool insertFeatures(const QVariantList &rows);
+    QVariantMap lineReading(bool current) const;
+    bool writeExport(QUrl dest, const QByteArray &data, QString success);
     Surface surface;
     QVariantMap gradePrefs;
     QByteArray pendingXml, savedXml;
@@ -73,6 +90,20 @@ class Survey : public QObject {
     Q_INVOKABLE bool finish();
     Q_INVOKABLE void discard();
     Q_INVOKABLE bool exportCsv(QUrl destination);
+    QVariantMap fieldPrefs() const { return workPrefs; }
+    QVariantList features() const { return featureRows; }
+    QVariantMap guidePaths() const { return paths; }
+    QVariantMap terrainPreview() const { return tinPreview; }
+    Q_INVOKABLE bool setCoverage(bool record, bool show, double radius);
+    Q_INVOKABLE bool includeShot(QString expectedJob, QString id, QString gpst, bool include);
+    Q_INVOKABLE bool previewTerrain(int epsg, QString datum, double maxEdge);
+    Q_INVOKABLE bool exportTerrain(QUrl destination);
+    Q_INVOKABLE bool createLine(QString name, QVariantList vertices);
+    Q_INVOKABLE QVariantMap inspectDxf(QUrl file);
+    Q_INVOKABLE bool importDxf(QStringList layers, int epsg, QString units);
+    Q_INVOKABLE bool followLine(QString name, double offset, double width, QString target, int segment,
+                                bool allowFloat);
+    Q_INVOKABLE QVariantMap previewLine(QString name, double offset, double width) const;
     Q_INVOKABLE QVariantList epochsFor(QString id) const;
   signals:
     void changed();
@@ -82,4 +113,6 @@ class Survey : public QObject {
     void gradeSetupChanged();
     void jobChanged();
     void eventsChanged();
+    void fieldChanged();
+    void previewChanged();
 };

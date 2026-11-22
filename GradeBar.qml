@@ -24,7 +24,7 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 12
+        anchors.margins: 8
         spacing: 12
         Item {
             id: ruler
@@ -112,13 +112,6 @@ Rectangle {
             Layout.minimumWidth: 0
             spacing: 4
             Label {
-                text: "GRADE   /   mm SCALE"
-                color: instrument.muted
-                font.pixelSize: 11
-                font.bold: true
-                font.letterSpacing: 1
-            }
-            Label {
                 color: instrument.signalColor
                 font.bold: true
                 font.pixelSize: instrument.width >= 370 ? 27 : 22
@@ -147,7 +140,7 @@ Rectangle {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: instrument.Material.foreground
-                text: instrument.available ? "Ground  " + grade.gradeGroundM.toFixed(3) + " m\nTarget    " + grade.gradeTargetM.toFixed(3) + " m" : grade.gradeStatus || "Configure a target in Instruments."
+                text: instrument.available ? "Ground  " + grade.gradeGroundM.toFixed(3) + " m\nTarget    " + grade.gradeTargetM.toFixed(3) + " m" : grade.gradeStatus || "Choose Design to set a target."
             }
             Label {
                 Layout.fillWidth: true

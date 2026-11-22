@@ -29,6 +29,10 @@ Survey::Survey() {
          {"PRAGMA foreign_keys=ON",
           "CREATE TABLE IF NOT EXISTS jobs(name TEXT PRIMARY KEY,antenna TEXT NOT NULL,pole REAL NOT "
           "NULL,frame TEXT NOT NULL)",
+          "CREATE TABLE IF NOT EXISTS field_settings(job TEXT PRIMARY KEY REFERENCES jobs(name), prefs "
+          "TEXT NOT NULL)",
+          "CREATE TABLE IF NOT EXISTS feature_lines(job TEXT REFERENCES jobs(name),name TEXT NOT "
+          "NULL,geometry TEXT NOT NULL,PRIMARY KEY(job,name))",
           "CREATE TABLE IF NOT EXISTS grading(job TEXT PRIMARY KEY REFERENCES jobs(name),settings TEXT NOT "
           "NULL,xml BLOB)",
           "CREATE TABLE IF NOT EXISTS points(job TEXT REFERENCES jobs(name),id TEXT NOT NULL,epoch "
@@ -94,6 +98,9 @@ void Survey::loadJobs() {
     emit jobsChanged();
 }
 void Survey::loadPoints() {
+    tinPreview.clear();
+    previewXml.clear();
+    emit previewChanged();
     pointRows.clear();
     lastPointEpoch.clear();
     QSqlQuery q(db);
@@ -146,6 +153,7 @@ void Survey::openJob(QString name) {
     QSettings().setValue("lastJob", job);
     loadPoints();
     loadGrade();
+    loadFieldwork();
     emit jobChanged();
     message("Opened " + job);
 }
@@ -168,6 +176,7 @@ QVariantMap Survey::state() const {
                                          live.value("longitudeDeg").toDouble(), z.toDouble())
                  : QVariantMap{}},
             {"live", live},
+            {"line", lineReading(current)},
             {"grade", guidance(live, current)},
             {"gradePrefs", gradePrefs},
             {"fresh", current},
@@ -555,6 +564,25 @@ bool Survey::save(QString id, QString code, QVariantMap p, bool benchmark) {
     addHeights(p, pole);
     if (!benchmark)
         p.insert(guidance(p, true));
+    if (!benchmark && !workPrefs.value("follow").toString().isEmpty()) {
+        const auto reading = lineReading(true);
+        p["featureLine"] = reading.value("name");
+        p["featureGuideTo"] = reading.value("target");
+        p["featureStatus"] = reading.value("status");
+        p["featureCentreRightM"] = workPrefs.value("offsetM");
+        p["featureFullWidthM"] = workPrefs.value("widthM");
+        if (reading.contains("rightM")) {
+            p["featureTargetRightM"] = reading["rightM"];
+            p["featureSourceRightM"] = reading["fromFeatureM"];
+            p["featureSegment"] = reading["segment"];
+            if (reading.contains("inside"))
+                p["featureInside"] = reading["inside"];
+        }
+    }
+    if (!benchmark && workPrefs.value("recordCoverage").toBool()) {
+        p["surfaceIncluded"] = true;
+        p["sampleRadiusM"] = workPrefs.value("radiusM", .5);
+    }
     // One atomic INSERT holds the snapshot and its contributing epochs together.
     QSqlQuery q(db);
     q.prepare("INSERT INTO points(job,id,epoch,record,samples) VALUES(?,?,?,?,?)");
@@ -620,19 +648,22 @@ bool Survey::exportCsv(QUrl dest) {
         }
         out += row.join(',').toUtf8() + "\r\n";
     }
+    return writeExport(dest, out, "CSV exported");
+}
+bool Survey::writeExport(QUrl dest, const QByteArray &out, QString success) {
     auto path = dest.isLocalFile() ? dest.toLocalFile() : dest.toString();
 #ifdef Q_OS_ANDROID
     if (dest.scheme() == "content") {
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(out) != out.size() || !f.flush())
             return message(f.errorString());
-        message("CSV exported");
+        message(success);
         return true;
     }
 #endif
     QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly) || f.write(out) != out.size() || !f.commit())
         return message(f.errorString());
-    message("CSV exported");
+    message(success);
     return true;
 }

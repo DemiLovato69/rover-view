@@ -8,6 +8,8 @@
 #include <proj.h>
 
 struct Surface {
+    static int utmZone(int epsg);
+    static std::unique_ptr<PJ, decltype(&proj_destroy)> utmProjection(int epsg);
     struct Vertex {
         double e, n, z;
     };

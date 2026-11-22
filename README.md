@@ -4,7 +4,7 @@ Field Rover turns a tablet or laptop into a **survey data collector for the Trim
 
 Built with **C++17 and Qt Quick** for Android, Linux, Windows, and macOS. A bundled practice rover, design surface, and aerial map let you try the field workflow without hardware or a caster account.
 
-![Daylight Work View showing the simulated rover on offline aerial imagery, its ground elevation, and the vertical cut/fill gauge](docs/screenshots/work-view-daylight.png)
+![Daylight Work View showing the site toolbar, the practice rover on offline imagery, and the 3D surface and grade gauge docked together](docs/screenshots/work-view-daylight.png)
 
 *The practice rover is on grade at 112.058 m CGVD2013. The orange outline marks the design surface; the green band shows the allowed tolerance.*
 
@@ -12,6 +12,8 @@ Built with **C++17 and Qt Quick** for Android, Linux, Windows, and macOS. A bund
 
 - **Collect points and benchmarks.** Store one fresh epoch with a tap, or hold the pole stationary for a timed occupation. Each record keeps its fix quality, base, antenna setup, and height reference. Jobs are saved locally in SQLite and export to CSV.
 - **Follow a grade.** Enter a target elevation or load a metric LandXML triangle mesh. The gauge shows how much to **cut** or **fill** after subtracting pole height. It clears when the position goes stale or the rover leaves the surface.
+- **Build a measured surface.** Enable survey coverage in Work View to mark each stored shot with a sampling footprint. Review the included points, preview the triangles and export the surveyed ground as LandXML.
+- **Follow a feature or trench edge.** Build a line by tapping the map or selecting stored points in order—no coordinate-system entry required. Import straight DXF linework or guide to either trench edge using a centre offset and full width. [Try the practice trench](docs/field-guide.md#follow-the-practice-trench).
 - **Work without a basemap connection.** Use a local grid or import raster MBTiles for the job. OpenStreetMap streets and online imagery are optional; missing tiles never block capture. Live NTRIP corrections still require a connection to the caster.
 - **Choose the instruments you need.** Keep latitude, longitude, and ground elevation visible while toggling the gauge, a device bubble level on supported hardware, or a 3D surface preview. Switch between Daylight, Dark, and system appearance.
 
@@ -22,7 +24,7 @@ Built with **C++17 and Qt Quick** for Android, Linux, Windows, and macOS. A bund
 ## Try the grading walk
 
 1. In **Connect**, choose **Continue to Job**. Create a practice job with antenna `Synthetic ARP` and a vertical pole height of **2.000 m**.
-2. Open **Job → Grade & surface setup → Design surface → Open practice surface**. Set the tolerance to **0.020 m** and tap **Use surface and references**.
+2. Open **Job → Grade & surface setup → Design surface → Practice surface**. Set the tolerance to **0.020 m** and tap **Use design**.
 3. In **Connect**, tap **Start grading walk (36 s)** and watch **Work View**. The simulated rover crosses a 2% slope: **CUT ~0.200 m → ON GRADE → FILL ~0.200 m → Outside design surface**.
 
 To see the imagery pictured above, select **Settings & Logs → Use practice-pad orthophoto (offline)**, then **Offline** on the map. For live equipment, see [connecting a receiver and RTK2go](docs/field-guide.md#connect-a-receiver).

@@ -5,20 +5,50 @@ import QtQuick.Layouts
 
 Rectangle {
     id: plot
+    property var draft: null
+    property var sketchAnchor: null
+    function freezeSketchOrigin() {
+        if (draft?.active && located && !sketchAnchor)
+            sketchAnchor = {
+                latitudeDeg: origin.latitudeDeg,
+                longitudeDeg: origin.longitudeDeg
+            };
+    }
+    Connections {
+        target: plot.draft
+        function onActiveChanged() {
+            if (plot.draft.active)
+                plot.freezeSketchOrigin();
+            else
+                plot.sketchAnchor = null;
+        }
+    }
+    onLocatedChanged: if (located)
+        Qt.callLater(freezeSketchOrigin)
+    readonly property var draftPath: draft ? draft.vertices : []
+    onDraftPathChanged: redraw()
     property var live: collector.state.live
     property var points: collector.points
     property var outline: collector.surfaceOutline
+    property var fieldPrefs: collector.fieldPrefs
+    property var features: collector.features
+    property var guides: collector.guidePaths
+    signal featureTapped(string name)
     property bool fresh: collector.state.fresh
     property real scaleM: 5  // metres per grid square
     property real east: 0
     property real north: 0
     property var origin: {
+        if (sketchAnchor)
+            return sketchAnchor;
         if (points.length)
             return points[points.length - 1];
         if (Number.isFinite(live.latitudeDeg))
             return live;
         if (outline.length)
             return outline[0];
+        if (features.length && features[0].path.length)
+            return features[0].path[0];
         const b = offline.bounds;
         if (layer.currentIndex === 3 && b && b.length === 4)
             return {
@@ -117,6 +147,9 @@ Rectangle {
     }
     onLiveChanged: redraw()
     onPointsChanged: redraw()
+    onFeaturesChanged: redraw()
+    onFieldPrefsChanged: redraw()
+    onGuidesChanged: redraw()
     onOutlineChanged: redraw()
     onFreshChanged: redraw()
     onPixelsChanged: redraw()
@@ -178,6 +211,77 @@ Rectangle {
             c.stroke();
             if (!plot.located)
                 return;
+            if (plot.fieldPrefs.showCoverage) {
+                c.save();
+                c.beginPath();
+                for (let shot of plot.points) {
+                    if (!shot.surfaceIncluded)
+                        continue;
+                    const p = plot.xy(shot), r = shot.sampleRadiusM * 64 / plot.scaleM;
+                    if (!(r > 0))
+                        continue;
+                    c.moveTo(p.x + r, p.y);
+                    c.arc(p.x, p.y, r, 0, Math.PI * 2);
+                }
+                c.fillRule = Qt.WindingFill;
+                c.fillStyle = "rgba(46,172,135,0.23)";
+                c.fill();
+                c.clip();
+                c.strokeStyle = plot.day ? "#397760" : "#74b99b";
+                c.lineWidth = 1;
+                c.beginPath();
+                for (let i = -height; i < width; i += 9) {
+                    c.moveTo(i, 0);
+                    c.lineTo(i + height, height);
+                }
+                c.stroke();
+                c.restore();
+            }
+            function drawLine(path, color, dash, arrows) {
+                if (!path || path.length < 2)
+                    return;
+                c.save();
+                c.strokeStyle = color;
+                c.lineWidth = arrows ? 3 : 2;
+                c.setLineDash(dash);
+                c.beginPath();
+                let prev = plot.xy(path[0]);
+                c.moveTo(prev.x, prev.y);
+                for (let i = 1; i < path.length; i++) {
+                    const v = plot.xy(path[i]);
+                    c.lineTo(v.x, v.y);
+                    let dx = v.x - prev.x, dy = v.y - prev.y, len = Math.hypot(dx, dy);
+                    if (arrows && len > 20) {
+                        const x = (prev.x + v.x) / 2, y = (prev.y + v.y) / 2;
+                        dx /= len;
+                        dy /= len;
+                        c.moveTo(x - 7 * dx + 4 * dy, y - 7 * dy - 4 * dx);
+                        c.lineTo(x, y);
+                        c.lineTo(x - 7 * dx - 4 * dy, y - 7 * dy + 4 * dx);
+                        c.moveTo(v.x, v.y);
+                    }
+                    prev = v;
+                }
+                c.stroke();
+                c.restore();
+            }
+            for (const line of plot.features)
+                drawLine(line.path, plot.day ? "#735522" : "#d1b999", [], false);
+            drawLine(plot.guides.source, "#e0942a", [], true);
+            if (plot.fieldPrefs.widthM > 0) {
+                drawLine(plot.guides.left, "#42a880", [], false);
+                drawLine(plot.guides.right, "#42a880", [], false);
+            }
+            drawLine(plot.guides.center, "#16adce", [8, 5], false);
+            if (plot.guides.source?.length) {
+                let start = plot.xy(plot.guides.source[0]);
+                c.font = "bold 13px sans-serif";
+                c.lineWidth = 3;
+                c.strokeStyle = "#14272d";
+                c.strokeText("START", start.x + 5, start.y - 5);
+                c.fillStyle = "#ffe39b";
+                c.fillText("START", start.x + 5, start.y - 5);
+            }
             c.strokeStyle = plot.day && !layer.currentIndex ? "#995000" : "#f4bc54";
             c.lineWidth = 2;
             c.beginPath();
@@ -213,6 +317,23 @@ Rectangle {
             for (let p of plot.points)
                 mark(p, false);
             mark(plot.live, true);
+            if (plot.draft?.active) {
+                drawLine(plot.draftPath, "#e58820", [6, 3], true);
+                plot.draftPath.forEach((p, i) => {
+                    const v = plot.xy(p);
+                    c.fillStyle = "#263036";
+                    c.strokeStyle = "#ffd080";
+                    c.lineWidth = 2;
+                    c.beginPath();
+                    c.arc(v.x, v.y, 12, 0, Math.PI * 2);
+                    c.fill();
+                    c.stroke();
+                    c.fillStyle = "white";
+                    c.textAlign = "center";
+                    c.fillText(String(i + 1), v.x, v.y + 4);
+                    c.textAlign = "start";
+                });
+            }
         }
     }
     DragHandler {
@@ -222,9 +343,80 @@ Rectangle {
             plot.north += delta.y;
         }
     }
+    TapHandler {
+        onTapped: eventPoint => {
+            let best = 18, selected = "";
+            const t = eventPoint.position;
+            if (plot.draft?.active) {
+                if (!plot.located) {
+                    plot.draft.error = "Start tracking, load a site map, or choose saved points in the list";
+                    return;
+                }
+                let near = plot.points.map(p => {
+                    let v = plot.xy(p);
+                    return {
+                        point: p,
+                        distance: Math.hypot(t.x - v.x, t.y - v.y)
+                    };
+                }).filter(h => h.distance <= 24).sort((a, b) => a.distance - b.distance);
+                if (near.length > 1 && near[1].distance - near[0].distance < 8) {
+                    pickPoint.candidates = near.map(h => h.point);
+                    pickPoint.open();
+                } else if (near.length)
+                    plot.draft.append(near[0].point);
+                else {
+                    let x = plot.ox + (t.x - plot.cx) / plot.pixels, y = plot.oy + (t.y - plot.cy) / plot.pixels;
+                    if (y >= 0 && y <= 1)
+                        plot.draft.append({
+                            longitudeDeg: ((x % 1 + 1) % 1) * 360 - 180,
+                            latitudeDeg: Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI
+                        });
+                }
+                return;
+            }
+            for (const f of plot.features) {
+                for (let i = 1; i < f.path.length; i++) {
+                    const a = plot.xy(f.path[i - 1]), b = plot.xy(f.path[i]), dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+                    if (!len)
+                        continue;
+                    let u = Math.max(0, Math.min(1, ((t.x - a.x) * dx + (t.y - a.y) * dy) / len));
+                    let dist = Math.hypot(t.x - a.x - u * dx, t.y - a.y - u * dy);
+                    if (dist < best) {
+                        best = dist;
+                        selected = f.name;
+                    }
+                }
+            }
+            if (selected)
+                plot.featureTapped(selected);
+        }
+    }
     PinchHandler {
         target: null
         onScaleChanged: delta => plot.zoomAt(delta, centroid.position.x, centroid.position.y)
+    }
+    FieldDialog {
+        id: pickPoint
+        preferredWidth: 360
+        title: "Choose nearby point"
+        dismissText: "Cancel"
+        property var candidates: []
+        ListView {
+            Layout.fillWidth: true
+            implicitHeight: Math.min(224, pickPoint.candidates.length * 56)
+            clip: true
+            model: pickPoint.candidates
+            delegate: ItemDelegate {
+                required property var modelData
+                width: ListView.view.width
+                height: 56
+                text: modelData.id + "   " + modelData.code
+                onClicked: {
+                    plot.draft.append(modelData);
+                    pickPoint.close();
+                }
+            }
+        }
     }
     FieldCombo {
         id: layer
@@ -247,6 +439,18 @@ Rectangle {
             plot.missingTiles = false;
             Qt.callLater(plot.updateTileStatus);
             plot.redraw();
+        }
+    }
+    Label {
+        anchors.left: parent.left
+        anchors.bottom: credit.top
+        visible: !!plot.fieldPrefs.showCoverage || !!plot.fieldPrefs.recordCoverage
+        padding: 3
+        color: "white"
+        font.pixelSize: 11
+        text: (plot.fieldPrefs.recordCoverage ? "Record: ON · " + plot.fieldPrefs.radiusM + " m radius" : "Record: OFF") + (plot.fieldPrefs.showCoverage ? " · Sample footprints" : "")
+        background: Rectangle {
+            color: "#df102e34"
         }
     }
     Label {

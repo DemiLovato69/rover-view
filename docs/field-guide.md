@@ -24,7 +24,7 @@ The Mac development bundle uses the installed Qt and PROJ libraries. The first c
 3. In **Work View**, tap **Store point**. The ID advances on save. The position strip always shows latitude, longitude and the selected ground elevation reference, even with the grade gauge visible. Last-known readings show their age. An unavailable CGVD2013 elevation is not replaced with ellipsoid height.
 4. Open **Points List** to inspect points and benchmark epochs or export CSV. Visit **Settings & Logs** for display settings, maps, receiver diagnostics and the current session's timestamped events. Changing screens does not stop collection or discard an occupation.
 
-**Customize Work View:** Tap **Instruments** to show or hide the grade gauge, device bubble or 3D preview. Hiding the gauge does not change grading or what gets stored. With a loaded LandXML design, the small 3D view draws its actual visible triangles at true vertical scale and shows the rover at its ground elevation when compatible. Drag to orbit, pinch or tap to zoom, and reset the view. It opens in a separate nonmodal desktop window or a dismissible tablet panel. **Load design for preview only** preserves an existing manual grade target.
+**Customize Work View:** The toolbar separates **site tools** (New line, Follow, Coverage, Design) from **view controls** (Grade, 3D, Level). Grade and 3D each start docked. Tap **Float** in either panel to move it to a separate desktop window or a movable in-app panel on tablets. Tap **Dock** to bring it back. Placement is remembered independently for each instrument. Hiding or moving the gauge does not change its target or what gets stored. A loaded LandXML design appears at true vertical scale; drag to orbit, pinch or tap to zoom. **Load design for preview only** preserves an existing manual grade target.
 
 Use the appearance button in the header or **Settings & Logs** to select **Auto**, **Daylight**, or **Dark**. Auto follows system appearance. Display preferences survive restart. A sensor-equipped tablet can put a bubble beside the grade readout. In Settings, hold the tablet stationary and zero it with its rigidly attached pole independently plumb. Recalibrate after a mount change; calibration is stored for the sensor and orientation. A handheld tablet measures device tilt only. This instrument never applies a tilt correction to a surveyed point.
 
@@ -32,7 +32,7 @@ Use the appearance button in the header or **Settings & Logs** to select **Auto*
 
 The vertical gauge has a fixed ±250 mm scale, with 10 mm ticks and numbered 50 mm graduations. Above the zero line is **CUT** (orange); below it is **FILL** (blue). The green band marks the configured tolerance. Outside the scale the pointer stays at the end, while the readout gives the full difference in metres. If guidance becomes unavailable the pointer disappears. Point ID, code and **Store point** sit in a fixed capture panel in either orientation.
 
-1. Create or open a practice job with a **2.000 m** vertical pole height. In **Job → Grade & surface setup** (also under **Work View → Instruments**), select **Design surface → Open practice surface**. Set tolerance to **0.020 m**, then tap **Use surface and references**.
+1. Create or open a practice job with a **2.000 m** vertical pole height. In **Work View → Design** (or **Job → Grade & surface setup**), select **Design surface → Practice surface**. Set tolerance to **0.020 m**, then tap **Use design**.
 2. In **Connect**, disconnect any previous session and tap **Start grading walk (36 s)**. The synthetic rover moves east at 1 m/s. Expect **CUT ~0.200 m** at the start, **ON GRADE** near 10 s, **FILL ~0.200 m** near 20 s, and **Outside design surface** after crossing the east edge. The same walk is available through a mock serial port with `python3 tools/mock5700.py --walk`.
 3. To try a constant elevation, use the **stationary** practice replay instead. Choose **Grade… → Manual target**, enter **112.258 m**, and select **CGVD2013**. Ground should be about **112.058 m** and the instruction **FILL 0.200 m**. Positive ground-minus-design means cut; negative means fill. The numerical value is the full difference even when the visual bar reaches its end.
 
@@ -41,6 +41,8 @@ The vertical gauge has a fixed ±250 mm scale, with 10 mm ticks and numbered 50 
 The active job stores its settings and a copy of the imported XML. The bar uses **ground height**, not antenna height. It clears the instruction when the epoch is stale, quality drops below the selected threshold (fixed by default), height is unavailable, or the rover leaves the TIN. Stored ordinary points and their CSV rows retain grade status, datum, tolerance, measured ground, target and signed difference when available, plus surface identity for a design job.
 
 ### Basemaps in the field
+
+See also: [survey coverage and measured-ground export](#survey-coverage-and-measured-ground-export) and [feature-line guidance](#follow-the-practice-trench).
 
 Choose **Local grid**, **Street**, **Satellite**, or **Offline** on the plot. Street uses OpenStreetMap at street scale. In Ontario, Satellite requests the provincial aerial imagery service through zoom 19 (actual resolution and coverage vary); elsewhere the default is the historical NASA regional overview through zoom 12. **Settings & Logs → Online satellite imagery** accepts a licensed HTTPS XYZ template, attribution and maximum native zoom. An endpoint with query parameters is kept for the session only. The map reports native zoom limits rather than claiming extra image detail. Tiles load asynchronously; zooming preserves the location under the zoom gesture. Online maps and RTK corrections have independent status.
 
@@ -51,6 +53,34 @@ For a network-free walkthrough, open a practice job, tap **Settings & Logs → U
 ### Delete a stored record
 
 Open **Points List**, tap the record, and choose **Delete point…** or **Delete benchmark…**. Check the ID and job name, then tap **Delete**. A benchmark's accepted epochs are deleted with it. Deletion is permanent, updates the plot and future exports, and does not change previously exported CSV files.
+
+### Survey coverage and measured-ground export
+
+1. Open **Work View → Coverage** (**Area** on the compact toolbar). Enable **Include new stored shots in surface**, set a sampling **radius in metres**, and apply. A radius of 0.50 m gives a 1.00 m diameter. Hatching appears after a successful **Store point**, never just from moving the rover. **Show sample footprints on map** is independent of recording.
+2. Radius changes apply to subsequent shots. Open a point in **Points List** to include or exclude it later. An existing footprint keeps its original radius; a point first included later receives the current radius. Benchmarks are excluded unless explicitly included. Check the stored quality of the shots you select: inclusion itself is not an accuracy filter.
+3. In **Job → Preview & export surveyed surface**, confirm the job's known reference frame and its NAD83(CSRS) UTM EPSG code, choose **CGVD2013** or **Ellipsoid**, and enter the **maximum triangle edge length**. Tap **Build surface preview**. Ground elevation already accounts for the measured pole height.
+4. Review the measured triangles, excluded count and gaps. Tap **Export preview as LandXML…**. This exports the preview, not the active grading design. Changing the points invalidates the preview. The file can be reopened through **Grade & surface setup**.
+
+The footprints describe sample reach; a shot does not measure the elevation of its entire circle. The export uses Delaunay triangles between selected shots and drops triangles exceeding the edge limit. A footprint radius does not invent vertices or clip triangle boundaries. Wide gaps can be excluded with a shorter edge limit; inspect the preview rather than assuming every unsampled area is a hole. At least three noncollinear positions in a common frame with the selected ground height are required. Resolve duplicate horizontal positions by excluding one shot. Feature lines are not automatically used as terrain breaklines.
+
+### Follow the practice trench
+
+1. Create a **practice** job with `Synthetic ARP`, a 2 m pole and frame `Practice NAD83(CSRS) EPSG:2959`. For real jobs use the actual known frame/epoch; the app does not infer a local CAD grid or perform a site calibration.
+2. In **Points List → Features → Import DXF…**, tap **Practice DXF** (or open [practice-trench.dxf](../fixtures/practice-trench.dxf)). Select **Drain A**, confirm metres and EPSG:2959, then import. Its first segment runs north across the practice pad.
+3. Tap **Drain A / 10** in the list, or select it using **Work View → Follow**. Tap **Right**, enter a **0.50 m** offset and **1.20 m** full width. Choose **Right edge** and tap **Start following**. On the map the arrowed solid line is the plan feature, the dashed line the offset centre, and the paired boundaries the edges. In the **Line Follow** instrument beside the grade gauge, the dashed target stays centred: the circle shows the rover, the shaded band shows the excavation, and the solid line marks the original plan feature. The numerical distance remains exact beyond the graphic’s scale. Segment lock and float acceptance are under **Options**.
+4. Start the **grading walk** in Connect. The rover walks east across the trench. Looking from the first vertex toward the last, a rover **0.80 m right of the plan line** is **inside**, **0.30 m right of centre** and **0.30 m left of the right edge**. The reading tells you where the rover *is*, not which way to move. These are projected grid metres. For a centred trench, leave the centre offset at zero and enter its full width.
+
+![Practice rover following the right trench edge with recorded sample footprints on the offline aerial map](screenshots/trench-follow.png)
+
+**Create a line:** Tap **New line** on the map toolbar or **New line from points** in Points List. Tap saved points in the order you want to follow them. On the map, tapping empty space adds an approximate sketch corner; nearby stored points snap, and closely spaced candidates open a picker. Switch with **Use map / Use list** without losing the draft. Tap **Finish**, review or reorder the numbered corners, then **Save line**. You can keep the suggested name. No coordinate-system entry is needed, even for a job without a declared grid.
+
+The app uses a supported job grid when available, otherwise a local metric projection centred on the first vertex. Existing DXF/grid features retain their projection. The line stores a **snapshot** of its vertices and the IDs of any snapped shots; deleting a shot later does not reshape it. A freehand map corner creates neither a measured elevation nor a survey record. DXF import and LandXML export still require the correct external drawing reference.
+
+![Construction line editor showing numbered vertices on the practice map, with controls to switch to the points list, undo, or finish](screenshots/map-line-builder.png)
+
+DXF import supports model-space `LINE`, straight `LWPOLYLINE`, and straight `POLYLINE` / `VERTEX` sequences in text DXF up to 16 MiB. It preserves layer membership, vertex order and closure; separate entities remain separate. Curves (including bulged polylines), blocks, meshes and unsupported entities are skipped, with counts before import. Confirm the drawing's units and projected frame: DXF X is easting and Y is northing. Guidance uses horizontal geometry only. Imports are all-or-nothing and never overwrite an existing same-named feature.
+
+Line guidance defaults to fixed RTK; float is explicit. A stale position or insufficient quality clears live distances while keeping the linework visible. Open lines stop guidance beyond either end. At competing branches, select a specific segment instead of relying on nearest-segment selection. Sharp reversals and locally collapsed offsets are rejected. Turning off line guidance does not turn off grading or point capture. Stored ordinary shots retain the active guide, segment, width, offset and available signed distances in their details and CSV export.
 
 ### Test the serial connection and NTRIP client
 

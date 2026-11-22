@@ -21,6 +21,8 @@ Button {
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
+        fontSizeMode: Text.HorizontalFit
+        minimumPixelSize: 12
         color: !button.enabled ? (button.day ? "#5c6b70" : "#a0adb4") : button.highlighted ? (button.day ? "white" : "#112126") : button.danger ? (button.day ? "#922c1c" : "#ffc0b6") : button.Material.foreground
     }
     background: Rectangle {
