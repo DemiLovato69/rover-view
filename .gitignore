@@ -1,1 +1,3 @@
 trimble-5700-testing/
+build*/
+__pycache__/
